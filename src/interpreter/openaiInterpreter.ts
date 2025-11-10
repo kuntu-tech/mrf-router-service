@@ -36,22 +36,27 @@ function buildPrompt(input: InterpretInput) {
     {
       role: 'system' as const,
       content:
-        'You are the Feedback Interpreter for the BusinessInsight MRF router. Treat each change as invoking a tool from the router toolbox and emit only the JSON payload the router can execute.\n' +
-        'Toolbox (pick whichever tools satisfy the feedback; omit everything else):\n' +
-        '• domain_correction — fix the overall domain or topic. Target: domain. Selector: `domain`.\n' +
-        '• schema_drift — signal that upstream schema or inputs changed. Target: meta.\n' +
-        '• scope_change — narrow or widen scope for the entire domain or a specific segment. Target: domain or segment selectors.\n' +
-        '• segment_add — create a new segment. Target: segment. Selector may be `segments` or a virtual ID you assign.\n' +
-        '• segment_merge — merge multiple segments (provide every selector involved, e.g., an array of segment selectors).\n' +
-        '• segment_remove — retire a segment. Target: segment. Selector must identify the segment to remove.\n' +
-        '• segment_rename — rename or relabel a segment. Target: segment/meta. Provide both the old selector and the new label in metadata when possible.\n' +
-        '• analysis_edit — modify insights or scoring for an analysis dimension (D1–D4). Selector: `segments[...].analysis.Dn`. Map D1↔Market Opportunity, D2↔Customer Persona, D3↔Conversion Rhythm, D4↔Competitive Advantage.\n' +
-        '• value_question_add/value_question_edit/value_question_remove — manage value questions for a selector. Provide `questionId` when identifiable.\n' +
-        '• feasibility_rerun — request a feasibility rerun for the affected selector.\n' +
-        '• meta_note — capture notes that should not rerun downstream stages.\n' +
-        '• conflict — raise when the feedback itself is contradictory.\n' +
+        'You are the Feedback Interpreter for the BusinessInsight MRF router. Think of every change as a precise tool call and emit only the JSON payload the router can execute.\n' +
+        'Toolbox (targets & selectors must match exactly):\n' +
+        'Domain:\n' +
+        '  • domain_correction → target `domain`, selector `domain` (rewrite the overall domain scope).\n' +
+        'Segments (target `segment`):\n' +
+        '  • segment_rescore → selector `segments` (rescore all segments at once; never a single ID).\n' +
+        '  • segment_edit → selector `segments[segmentId=seg_X]` (regenerate one specific segment; ID or name required).\n' +
+        '  • segment_add → selector `segments` (optionally include virtual IDs/metadata for the new segment).\n' +
+        '  • segment_remove → selector `segments[segmentId=seg_X]` (deleting demands the exact ID).\n' +
+        '  • segment_rename → selector `segments[segmentId=seg_X]` (include new label in metadata).\n' +
+        'Analysis (target `analysis`):\n' +
+        '  • analysis_recore → selector `segments[segmentId=seg_X].analysis` (re-score D1–D4 for that segment).\n' +
+        '  • analysis_edit → selector `segments[segmentId=seg_X].analysis.Dn` (edit a specific dimension; set `dimension = Dn`).\n' +
+        '  • analysis_rename → selector `segments[segmentId=seg_X].analysis.Dn` (rename the dimension label only).\n' +
+        'Value questions (target `valueQuestions`):\n' +
+        '  • value_question_rescore → selector `segments[segmentId=seg_X].valueQuestions` (regenerate the entire question list).\n' +
+        '  • value_question_edit → selector `segments[segmentId=seg_X].valueQuestions[id=q_X]` (update one question; ID required).\n' +
+        '  • value_question_add → selector `segments[segmentId=seg_X].valueQuestions` (append a new question under that segment).\n' +
+        '  • value_question_remove → selector `segments[segmentId=seg_X].valueQuestions[id=q_X]` (remove that exact question).\n' +
         'Targets & selectors:\n' +
-        '- Targets must be one of: domain, segment, analysis, valueQuestions, feasibility, meta.\n' +
+        '- Targets must be one of: domain, segment, analysis, valueQuestions.\n' +
         '- Use TRL selectors such as `segments[segmentId=seg_01]`, `segments[name=Fashion].valueQuestions`, or arrays of selectors for merge operations. Prefer IDs/names supplied in current_data; otherwise infer from the text.\n' +
         '- Analysis selectors must include `.analysis.Dn`; always set the matching `dimension` field.\n' +
         'Interpretation rules:\n' +
@@ -149,7 +154,7 @@ function sanitizeJson(payload: string): string {
   return trimmed;
 }
 
-const allowedTargets = ['domain', 'segment', 'analysis', 'valueQuestions', 'feasibility', 'meta'] as const;
+const allowedTargets = ['domain', 'segment', 'analysis', 'valueQuestions'] as const;
 
 type AllowedTarget = (typeof allowedTargets)[number];
 
@@ -363,14 +368,12 @@ function normalizeTarget(value: unknown): AllowedTarget | undefined {
     }
   }
 
-  const heuristics: Array<[RegExp, AllowedTarget]> = [
-    [/domain/, 'domain'],
-    [/segment/, 'segment'],
-    [/analysis/, 'analysis'],
-    [/value[_\-\s]?question/, 'valueQuestions'],
-    [/feasib/, 'feasibility'],
-    [/meta/, 'meta'],
-  ];
+const heuristics: Array<[RegExp, AllowedTarget]> = [
+  [/domain/, 'domain'],
+  [/segment/, 'segment'],
+  [/analysis/, 'analysis'],
+  [/value[_\-\s]?question/, 'valueQuestions'],
+];
 
   for (const [pattern, target] of heuristics) {
     if (pattern.test(lower)) {
@@ -383,19 +386,19 @@ function normalizeTarget(value: unknown): AllowedTarget | undefined {
 
 const legacyIntents = new Set<FeedbackIntent>([
   'domain_correction',
-  'schema_drift',
+  'segment_rescore',
+  'segment_edit',
   'segment_add',
-  'segment_merge',
   'segment_remove',
   'segment_rename',
-  'scope_change',
+  'segment_merge',
+  'analysis_recore',
   'analysis_edit',
+  'analysis_rename',
+  'value_question_rescore',
+  'value_question_edit',
   'value_question_add',
   'value_question_remove',
-  'value_question_edit',
-  'feasibility_rerun',
-  'meta_note',
-  'conflict',
 ]);
 
 function isLegacyIntent(value: unknown): value is FeedbackIntent {
@@ -428,12 +431,6 @@ function canonicalizeIntent(
       return mapRenameIntent(target);
     case 'remove':
       return mapRemoveIntent(target);
-    case 'merge':
-      return 'segment_merge';
-    case 'rescore':
-      return 'feasibility_rerun';
-    case 'scope_change':
-      return 'scope_change';
     default:
       break;
   }
@@ -460,8 +457,6 @@ function mapAddIntent(target: AllowedTarget | undefined): FeedbackIntent {
       return 'value_question_add';
     case 'domain':
       return 'domain_correction';
-    case 'feasibility':
-      return 'feasibility_rerun';
     default:
       return 'analysis_edit';
   }
@@ -472,13 +467,11 @@ function mapEditIntent(target: AllowedTarget | undefined): FeedbackIntent {
     case 'analysis':
       return 'analysis_edit';
     case 'segment':
-      return 'scope_change';
+      return 'segment_edit';
     case 'valueQuestions':
       return 'value_question_edit';
     case 'domain':
       return 'domain_correction';
-    case 'feasibility':
-      return 'feasibility_rerun';
     default:
       return 'analysis_edit';
   }
@@ -526,8 +519,11 @@ function mapHeuristicIntent(
     }
   }
 
-  if (matchesAny(normalized, ['feasib', 'rerun', 're run', 'rescore'])) {
-    return 'feasibility_rerun';
+  if (matchesAny(normalized, ['rescore', 're score', 'rerun', 're run'])) {
+    if (target === 'analysis') {
+      return 'analysis_recore';
+    }
+    return 'segment_rescore';
   }
 
   if (matchesAny(normalized, ['rename'])) {
@@ -536,10 +532,6 @@ function mapHeuristicIntent(
 
   if (matchesAny(normalized, ['merge', 'combine'])) {
     return 'segment_merge';
-  }
-
-  if (matchesAny(normalized, ['scope', 'retarget', 'refocus'])) {
-    return 'scope_change';
   }
 
   if (
@@ -567,17 +559,13 @@ function matchesAny(text: string, needles: string[]): boolean {
 function fallbackIntentForTarget(target: AllowedTarget): FeedbackIntent {
   switch (target) {
     case 'domain':
-      return 'scope_change';
+      return 'domain_correction';
     case 'segment':
-      return 'scope_change';
+      return 'segment_edit';
     case 'analysis':
       return 'analysis_edit';
     case 'valueQuestions':
       return 'value_question_edit';
-    case 'feasibility':
-      return 'feasibility_rerun';
-    case 'meta':
-      return 'meta_note';
   }
 }
 
@@ -587,7 +575,7 @@ function inferIntentFromFeedback(
 ): FeedbackIntent | undefined {
   const normalized = typeof feedbackText === 'string' ? feedbackText.toLowerCase() : '';
   if (normalized && indicatesSegmentScopeRestriction(normalized)) {
-    return 'scope_change';
+    return 'segment_edit';
   }
   const dimension = inferDimensionFromText(feedbackText);
   if (dimension) {
@@ -631,13 +619,6 @@ function inferTargetFromSelector(selector: unknown): AllowedTarget | undefined {
   if (lower.includes('domain')) {
     return 'domain';
   }
-  if (lower.includes('feasib')) {
-    return 'feasibility';
-  }
-  if (lower.includes('meta')) {
-    return 'meta';
-  }
-
   return undefined;
 }
 
@@ -1038,9 +1019,6 @@ function applySegmentSelector(
     case 'valueQuestions':
       change.selector = `${baseSelector}.valueQuestions`;
       break;
-    case 'feasibility':
-      change.selector = `${baseSelector}.feasibility`;
-      break;
     default:
       change.selector = baseSelector;
   }
@@ -1054,12 +1032,7 @@ function applySegmentSelector(
 }
 
 function targetRequiresSegmentContext(target: AllowedTarget | undefined): boolean {
-  return (
-    target === 'segment' ||
-    target === 'analysis' ||
-    target === 'valueQuestions' ||
-    target === 'feasibility'
-  );
+  return target === 'segment' || target === 'analysis' || target === 'valueQuestions';
 }
 
 function extractSegmentIdFromSelector(selector: string): string | undefined {
