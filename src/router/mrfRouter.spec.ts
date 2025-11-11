@@ -21,33 +21,33 @@ describe('MRF Router Expected Behavior Matrix', () => {
     const result = plan([{ intent: 'domain_correction', target: 'domain', confidence: 0.91 }]);
     expect(result.mrf).toBe('infer');
     expect(result.scope).toBe('all');
-    expect(result.steps).toEqual(['infer', 'segment', 'analyze', 'valueQs', 'feasibility']);
+    expect(result.steps).toEqual(['infer', 'segments', 'analyze', 'valueQs', 'feasibility']);
   });
 
   it('adding a segment reruns segment stage and cascades', () => {
     const result = plan([
       {
         intent: 'segment_add',
-        target: 'segment',
+        target: 'segments',
         selector: 'segments[segmentId=seg_new_eu]',
         confidence: 0.92,
       },
     ]);
-    expect(result.mrf).toBe('segment');
+    expect(result.mrf).toBe('segments');
     expect(result.scope).toEqual(['seg_new_eu']);
-    expect(result.steps).toEqual(['segment', 'analyze', 'valueQs', 'feasibility']);
+    expect(result.steps).toEqual(['segments', 'analyze', 'valueQs', 'feasibility']);
   });
 
   it('editing a segment regenerates downstream analysis', () => {
     const result = plan([
       {
         intent: 'segment_edit',
-        target: 'segment',
+        target: 'segments',
         selector: 'segments[segmentId=seg_02]',
         confidence: 0.9,
       },
     ]);
-    expect(result.mrf).toBe('segment');
+    expect(result.mrf).toBe('segments');
     expect(result.scope).toEqual(['seg_02']);
     expect(result.propagate).toEqual(['analyze', 'valueQs', 'feasibility']);
   });
@@ -56,27 +56,27 @@ describe('MRF Router Expected Behavior Matrix', () => {
     const result = plan([
       {
         intent: 'segment_merge',
-        target: 'segment',
+        target: 'segments',
         selector: ['segments[name=Fashion]', 'segments[name=Accessories]'],
         confidence: 0.93,
       },
     ]);
     expect(result.scope).toEqual(['seg_accessories', 'seg_fashion']);
-    expect(result.steps).toEqual(['segment', 'analyze', 'valueQs', 'feasibility']);
+    expect(result.steps).toEqual(['segments', 'analyze', 'valueQs', 'feasibility']);
   });
 
   it('rescoring segments touches the full downstream pipeline', () => {
     const result = plan([
       {
         intent: 'segment_rescore',
-        target: 'segment',
+        target: 'segments',
         selector: 'segments',
         confidence: 0.9,
       },
     ]);
-    expect(result.mrf).toBe('segment');
+    expect(result.mrf).toBe('segments');
     expect(result.scope).toBe('all');
-    expect(result.steps).toEqual(['segment', 'analyze', 'valueQs', 'feasibility']);
+    expect(result.steps).toEqual(['segments', 'analyze', 'valueQs', 'feasibility']);
   });
 
   it('editing D1 with a large delta propagates value questions under standard policy', () => {
@@ -231,7 +231,7 @@ describe('MRF Router Expected Behavior Matrix', () => {
 
   it('segment rename only adjusts metadata', () => {
     const result = plan([
-      { intent: 'segment_rename', target: 'segment', selector: 'segments[segmentId=seg_03]', confidence: 0.9 },
+      { intent: 'segment_rename', target: 'segments', selector: 'segments[segmentId=seg_03]', confidence: 0.9 },
     ]);
     expect(result.mrf).toBeNull();
     expect(result.scope).toEqual(['seg_03']);
@@ -241,7 +241,7 @@ describe('MRF Router Expected Behavior Matrix', () => {
   it('conflicting commands throw CONFLICTING_COMMANDS', () => {
     expect(() =>
       plan([
-        { intent: 'segment_remove', target: 'segment', selector: 'segments[segmentId=seg_02]', confidence: 0.92 },
+        { intent: 'segment_remove', target: 'segments', selector: 'segments[segmentId=seg_02]', confidence: 0.92 },
         {
           intent: 'analysis_edit',
           target: 'analysis',

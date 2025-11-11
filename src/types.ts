@@ -1,6 +1,6 @@
-export type Stage = 'infer' | 'segment' | 'analyze' | 'valueQs' | 'feasibility';
+export type Stage = 'infer' | 'segments' | 'analyze' | 'valueQs' | 'feasibility';
 
-export const STAGE_ORDER: Stage[] = ['infer', 'segment', 'analyze', 'valueQs', 'feasibility'];
+export const STAGE_ORDER: Stage[] = ['infer', 'segments', 'analyze', 'valueQs', 'feasibility'];
 
 export type Policy = 'conservative' | 'standard' | 'aggressive';
 
@@ -24,7 +24,7 @@ export type FeedbackIntent =
 
 export interface FeedbackChange {
   intent: FeedbackIntent;
-  target: 'domain' | 'segment' | 'analysis' | 'valueQuestions';
+  target: 'domain' | 'segments' | 'analysis' | 'valueQuestions';
   selector?: string | string[];
   dimension?: AnalysisDimension;
   questionId?: string;

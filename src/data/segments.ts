@@ -15,10 +15,10 @@ export const demoSegments: SegmentDescriptor[] = [
   },
   {
     id: 'seg_fashion',
-    labels: ['fashion', 'fashion segment'],
+    labels: ['fashion', 'fashion segments'],
   },
   {
     id: 'seg_accessories',
-    labels: ['accessories', 'accessories segment'],
+    labels: ['accessories', 'accessories segments'],
   },
 ];

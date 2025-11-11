@@ -40,7 +40,7 @@ Lightweight router that turns natural language feedback into deterministic rerun
 - resolves selectors with `resolveSegmentScope`, which uses the provided `ScopeResolver` to turn strings like `segments[segmentId=seg_01]`, `segments[name=Fashion]`, `seg_01`, or the token `segments`/`*`/`all` into segment IDs (or `'all'`). Virtual segments (e.g., for `segment_add`) are allowed via `allowVirtualSegments`.
 - tracks conflicting commands (`segment_remove` vs. other segment edits, value question removes vs. other question actions) and throws `RouterError('CONFLICTING_COMMANDS')` if they collide.
 - collapses the resolved `scope` into either `'all'` or a sorted array of segment IDs. If any change demands segments but none can be resolved, it errors with `EMPTY_SCOPE`.
-- sets `plan.mrf` to the earliest stage (`STAGE_ORDER = ['infer','segment','analyze','valueQs','feasibility']`) touched by the changes, orders `propagate` and `steps` using that stage order, and returns `expectedActions`/`artifactImpacts` for instrumentation.
+- sets `plan.mrf` to the earliest stage (`STAGE_ORDER = ['infer','segments','analyze','valueQs','feasibility']`) touched by the changes, orders `propagate` and `steps` using that stage order, and returns `expectedActions`/`artifactImpacts` for instrumentation.
 
 `determineAnalysisPropagation` rules:
 

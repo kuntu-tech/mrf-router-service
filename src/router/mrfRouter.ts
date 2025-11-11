@@ -206,7 +206,7 @@ function buildConflictKeys(change: FeedbackChange, segmentId: string): string[] 
     const questionKey = change.questionId ?? '*';
     return [`question::${segmentId}::${questionKey}`];
   }
-  if (change.target === 'segment' || change.target === 'analysis') {
+  if (change.target === 'segments' || change.target === 'analysis') {
     return [`segment::${segmentId}`];
   }
   return [];
@@ -239,14 +239,14 @@ function resolveChange(change: FeedbackChange, policy: Policy): ChangeResolution
     case 'domain_correction':
       return {
         stage: 'infer',
-        propagate: ['segment', 'analyze', 'valueQs', 'feasibility'],
+        propagate: ['segments', 'analyze', 'valueQs', 'feasibility'],
         scopeBehavior: 'all',
         expectedActions: ['Re-run entire pipeline for domain correction'],
         artifactImpacts: ['domain.changed', 'segments.regenerated', 'valueQuestions.regenerated'],
       };
     case 'segment_rescore':
       return {
-        stage: 'segment',
+        stage: 'segments',
         propagate: ['analyze', 'valueQs', 'feasibility'],
         scopeBehavior: 'segments',
         expectedActions: ['Rescore segments and refresh downstream artifacts'],
@@ -254,7 +254,7 @@ function resolveChange(change: FeedbackChange, policy: Policy): ChangeResolution
       };
     case 'segment_add':
       return {
-        stage: 'segment',
+        stage: 'segments',
         propagate: ['analyze', 'valueQs', 'feasibility'],
         scopeBehavior: change.selector === undefined ? 'none' : 'segments',
         allowVirtualSegments: true,
@@ -263,7 +263,7 @@ function resolveChange(change: FeedbackChange, policy: Policy): ChangeResolution
       };
     case 'segment_edit':
       return {
-        stage: 'segment',
+        stage: 'segments',
         propagate: ['analyze', 'valueQs', 'feasibility'],
         scopeBehavior: 'segments',
         expectedActions: ['Regenerate segment and downstream analysis'],
@@ -271,7 +271,7 @@ function resolveChange(change: FeedbackChange, policy: Policy): ChangeResolution
       };
     case 'segment_merge':
       return {
-        stage: 'segment',
+        stage: 'segments',
         propagate: ['analyze', 'valueQs', 'feasibility'],
         scopeBehavior: 'segments',
         expectedActions: ['Merge segments and refresh downstream analysis'],
@@ -287,7 +287,7 @@ function resolveChange(change: FeedbackChange, policy: Policy): ChangeResolution
       };
     case 'segment_remove':
       return {
-        stage: 'segment',
+        stage: 'segments',
         propagate: ['analyze', 'valueQs', 'feasibility'],
         scopeBehavior: 'segments',
         expectedActions: ['Remove segment and clean downstream artifacts'],

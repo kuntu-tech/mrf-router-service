@@ -19,7 +19,7 @@ export const feedbackChangeSchema = z.object({
   ]),
   target: z.union([
     z.literal('domain'),
-    z.literal('segment'),
+    z.literal('segments'),
     z.literal('analysis'),
     z.literal('valueQuestions'),
   ]),

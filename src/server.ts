@@ -44,7 +44,7 @@ const changeSchema = z.object({
     z.literal('value_question_add'),
     z.literal('value_question_remove'),
   ]),
-  target: z.union([z.literal('domain'), z.literal('segment'), z.literal('analysis'), z.literal('valueQuestions')]),
+  target: z.union([z.literal('domain'), z.literal('segments'), z.literal('analysis'), z.literal('valueQuestions')]),
   selector: z.union([z.string(), z.array(z.string())]).optional(),
   dimension: z.enum(['D1', 'D2', 'D3', 'D4']).optional(),
   questionId: z.string().optional(),
@@ -491,7 +491,7 @@ function deriveSegmentRemoval(
   }
 
   const lowered = feedbackText.toLowerCase();
-  if (!/(delete|remove|drop|kill|discard)/i.test(lowered) || !lowered.includes('segment')) {
+  if (!/(delete|remove|drop|kill|discard)/i.test(lowered) || !lowered.includes('segments')) {
     return undefined;
   }
 
@@ -503,7 +503,7 @@ function deriveSegmentRemoval(
 
   return {
     intent: 'segment_remove',
-    target: 'segment',
+    target: 'segments',
     selector: `segments[segmentId=${matchingSegment.id}]`,
     confidence: Math.max(config.interpreter.confidenceThreshold ?? 0.7, 0.8),
     feedback_text: feedbackText,
@@ -530,7 +530,7 @@ function collectScopeSignals(changes: FeedbackChange[]): GuidanceSignal[] {
   const signals = new Set<GuidanceSignal>();
   for (const change of changes) {
     if (
-      change.target === 'segment' &&
+      change.target === 'segments' &&
       (change.scopeAll || isGenericSegmentSelector(change.selector))
     ) {
       signals.add('ambiguous_segment_scope');
@@ -547,7 +547,7 @@ function isGenericSegmentSelector(selector: string | string[] | undefined): bool
     return selector.length === 0 || selector.every((token) => token === 'segments');
   }
   const lowered = selector.toLowerCase();
-  return lowered === 'segments' || lowered === 'segment';
+  return lowered === 'segments' || lowered === 'segments';
 }
 
 function buildGuidanceMessages(
