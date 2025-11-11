@@ -19,6 +19,11 @@ export interface ServiceConfig {
   baseline: {
     allowMissing: boolean;
   };
+  dify?: {
+    baseUrl: string;
+    apiKeyEnv: string;
+    defaultResponseMode?: 'streaming' | 'blocking';
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires

@@ -15,5 +15,10 @@
   },
   "baseline": {
     "allowMissing": false
+  },
+  "dify": {
+    "baseUrl": "https://api.dify.ai/v1",
+    "apiKeyEnv": "app-7vLembh6u1b45EOnt80rSurQ",
+    "defaultResponseMode": "streaming"
   }
 }

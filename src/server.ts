@@ -1,5 +1,7 @@
-import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import Fastify from 'fastify';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { z } from 'zod';
 
 import config from './config';
@@ -13,6 +15,7 @@ import {
   type ScopeResolver,
   type AnalysisDimension,
 } from './index';
+import { sendDifyChatMessage } from './dify/chatClient';
 import { interpretFeedback } from './interpreter/openaiInterpreter';
 import type { SegmentDescriptor } from './resolvers/scopeResolver';
 
@@ -77,6 +80,17 @@ const autoPlanSchema = z.object({
   policy: z.union([z.literal('conservative'), z.literal('standard'), z.literal('aggressive')]).optional(),
   current_data: z.record(z.string(), z.unknown()).optional(),
   current_segmentId: z.string().optional(),
+});
+
+const difyResponseModeSchema = z.enum(['streaming', 'blocking']);
+
+const intentionSchema = z.object({
+  query: z.string().min(1),
+  inputs: z.record(z.string(), z.unknown()).optional(),
+  response_mode: difyResponseModeSchema.optional(),
+  conversation_id: z.string().optional(),
+  user: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 fastify.get('/health', async () => ({ status: 'ok' }));
@@ -184,6 +198,78 @@ fastify.post('/api/v1/feedback-mrf/plan', async (request, reply) => {
     return {
       error: 'INTERPRETER_OR_ROUTER_FAILED',
       message: error instanceof Error ? error.message : 'Interpreter or router failed',
+    };
+  }
+});
+
+fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
+  const payload = intentionSchema.parse(request.body ?? {});
+  try {
+    const { response, mode } = await sendDifyChatMessage(payload);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      request.log.error(
+        {
+          status: response.status,
+          body: errorText,
+        },
+        'Dify request failed',
+      );
+      reply.status(response.status);
+      return {
+        error: 'DIFY_ERROR',
+        message: errorText || 'Dify request failed',
+      };
+    }
+
+    const contentType = response.headers.get('content-type') ?? undefined;
+
+    if (mode === 'streaming') {
+      if (!response.body) {
+        reply.status(502);
+        return {
+          error: 'DIFY_STREAM_ERROR',
+          message: 'Streaming response missing body.',
+        };
+      }
+
+      if (contentType) {
+        reply.header('Content-Type', contentType);
+      } else {
+        reply.header('Content-Type', 'text/event-stream');
+      }
+
+      const cacheControl = response.headers.get('cache-control');
+      if (cacheControl) {
+        reply.header('Cache-Control', cacheControl);
+      }
+      const connection = response.headers.get('connection');
+      if (connection) {
+        reply.header('Connection', connection);
+      }
+
+      return reply.send(Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>));
+    }
+
+    const rawText = await response.text();
+    let data: unknown = {};
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = { raw: rawText };
+      }
+    }
+
+    reply.header('Content-Type', contentType ?? 'application/json');
+    return data;
+  } catch (error) {
+    request.log.error(error);
+    reply.status(502);
+    return {
+      error: 'DIFY_REQUEST_FAILED',
+      message: error instanceof Error ? error.message : 'Dify request failed',
     };
   }
 });
