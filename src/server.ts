@@ -1,7 +1,6 @@
 import cors from '@fastify/cors';
 import Fastify from 'fastify';
-import { Readable } from 'node:stream';
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { z } from 'zod';
 
 import config from './config';
@@ -15,7 +14,7 @@ import {
   type ScopeResolver,
   type AnalysisDimension,
 } from './index';
-import { sendDifyChatMessage } from './dify/chatClient';
+import { sendDifyChatMessage, type DifyResponseMode } from './dify/chatClient';
 import { interpretFeedback } from './interpreter/openaiInterpreter';
 import type { SegmentDescriptor } from './resolvers/scopeResolver';
 
@@ -84,13 +83,106 @@ const autoPlanSchema = z.object({
 
 const difyResponseModeSchema = z.enum(['streaming', 'blocking']);
 
+const analysisDimensionSchema = z
+  .object({
+    score: z.number().optional(),
+    summary: z.string().optional(),
+    supporting_indicators: z.array(z.string()).optional(),
+    user_persona: z
+      .object({
+        role: z.string().optional(),
+        pain_points: z.array(z.string()).optional(),
+        company_type: z.string().optional(),
+      })
+      .optional(),
+    revenue_band: z.string().optional(),
+    retention_signal: z.string().optional(),
+    conversion_rate_est: z.number().optional(),
+    moat_score: z.number().optional(),
+    scalability_score: z.number().optional(),
+    competitive_advantage: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+const analysisSchema = z
+  .object({
+    D1: analysisDimensionSchema.optional(),
+    D2: analysisDimensionSchema.optional(),
+    D3: analysisDimensionSchema.optional(),
+    D4: analysisDimensionSchema.optional(),
+  })
+  .passthrough();
+
+const valueQuestionSchema = z
+  .object({
+    id: z.string().optional(),
+    sql: z.string().optional(),
+    intent: z.string().optional(),
+    question: z.string().optional(),
+    rationale: z.string().optional(),
+    answerShape: z.enum(['comparison', 'trend', 'distribution', 'optimization', 'correlation']).optional(),
+  })
+  .passthrough();
+
+const segmentSchema = z
+  .object({
+    name: z.string().optional(),
+    segmentId: z.string().optional(),
+    segment_id: z.string().optional(),
+    segment_type: z.enum(['B2B', 'B2C', 'Other']).optional(),
+    scope: z
+      .object({
+        size: z.string().optional(),
+        region: z.string().optional(),
+        industry: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    analysis: analysisSchema.optional(),
+    valueQuestions: z.array(valueQuestionSchema).optional(),
+    confidence: z.number().optional(),
+    justification: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+const anchIndexSchema = z
+  .object({
+    index: z.number().int().optional(),
+    table: z.string().optional(),
+    columns: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+const currentDataSchema = z
+  .object({
+    domain: z
+      .object({
+        primaryDomain: z.string().optional(),
+      })
+      .passthrough(),
+    ingest: z
+      .object({
+        schemaHash: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    run_id: z.string().optional(),
+    status: z.enum(['pending', 'running', 'complete', 'failed']).optional(),
+    task_id: z.string().optional(),
+    segments: z.array(segmentSchema),
+    anchIndex: z.array(anchIndexSchema).optional(),
+    parent_run_id: z.union([z.string(), z.null()]).optional(),
+  })
+  .passthrough();
+
 const intentionSchema = z.object({
-  query: z.string().min(1),
-  inputs: z.record(z.string(), z.unknown()).optional(),
-  response_mode: difyResponseModeSchema.optional(),
-  conversation_id: z.string().optional(),
-  user: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  feedback_text: z.string().min(1),
+  base_run_id: z.string(),
+  policy: z.enum(['standard', 'strict', 'lenient']).optional(),
+  user_id: z.string().uuid(),
+  task_id: z.string(),
+  connection_id: z.string().optional(),
+  current_data: currentDataSchema,
 });
 
 fastify.get('/health', async () => ({ status: 'ok' }));
@@ -205,7 +297,31 @@ fastify.post('/api/v1/feedback-mrf/plan', async (request, reply) => {
 fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
   const payload = intentionSchema.parse(request.body ?? {});
   try {
-    const { response, mode } = await sendDifyChatMessage(payload);
+    const inputs: Record<string, unknown> = {
+      run_results: JSON.stringify(payload.current_data),
+    };
+    if (payload.base_run_id) {
+      inputs.base_run_id = payload.base_run_id;
+    }
+    if (payload.policy) {
+      inputs.policy = payload.policy;
+    }
+    if (payload.user_id) {
+      inputs.user_id = payload.user_id;
+    }
+    if (payload.task_id) {
+      inputs.task_id = payload.task_id;
+    }
+    if (payload.connection_id) {
+      inputs.connection_id = payload.connection_id;
+    }
+
+    const { response, mode } = await sendDifyChatMessage({
+      query: payload.feedback_text,
+      inputs,
+      user: payload.user_id,
+      response_mode: 'blocking',
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -223,47 +339,34 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
       };
     }
 
-    const contentType = response.headers.get('content-type') ?? undefined;
+    const data = await readDifyResponseBody(response, mode);
+    request.log.info({ dify_response: data }, 'Received response from Dify');
 
-    if (mode === 'streaming') {
-      if (!response.body) {
-        reply.status(502);
-        return {
-          error: 'DIFY_STREAM_ERROR',
-          message: 'Streaming response missing body.',
-        };
-      }
-
-      if (contentType) {
-        reply.header('Content-Type', contentType);
-      } else {
-        reply.header('Content-Type', 'text/event-stream');
-      }
-
-      const cacheControl = response.headers.get('cache-control');
-      if (cacheControl) {
-        reply.header('Cache-Control', cacheControl);
-      }
-      const connection = response.headers.get('connection');
-      if (connection) {
-        reply.header('Connection', connection);
-      }
-
-      return reply.send(Readable.fromWeb(response.body as unknown as NodeReadableStream<Uint8Array>));
+    const changesArray = extractDifyChanges(data);
+    const changeset = mapChangeset(changesArray, payload.feedback_text);
+    if (!changeset.length) {
+      request.log.error(
+        {
+          data,
+        },
+        'Dify response did not contain a valid changeset',
+      );
+      reply.status(502);
+      return {
+        error: 'DIFY_INVALID_RESPONSE',
+        message: 'Dify response did not include a valid changeset.',
+      };
     }
 
-    const rawText = await response.text();
-    let data: unknown = {};
-    if (rawText) {
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        data = { raw: rawText };
-      }
-    }
+    const model = extractDifyModel(data) ?? 'dify';
 
-    reply.header('Content-Type', contentType ?? 'application/json');
-    return data;
+    return {
+      base_run_id: payload.base_run_id,
+      user_id: payload.user_id,
+      task_id: payload.task_id,
+      model,
+      changeset,
+    };
   } catch (error) {
     request.log.error(error);
     reply.status(502);
@@ -273,6 +376,352 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
     };
   }
 });
+
+type ChangesetIntent = 'segment_edit' | 'add' | 'edit' | 'remove' | 'merge' | 'rescore' | 'scope_change';
+
+interface ChangesetEntry {
+  intent: ChangesetIntent;
+  target: string;
+  selector: string;
+  confidence: number;
+  prompt: string;
+}
+
+const allowedChangesetIntents: ChangesetIntent[] = [
+  'segment_edit',
+  'add',
+  'edit',
+  'remove',
+  'merge',
+  'rescore',
+  'scope_change',
+];
+
+async function readDifyResponseBody(response: Response, mode: DifyResponseMode): Promise<unknown> {
+  if (mode === 'streaming') {
+    if (!response.body) {
+      throw new Error('Streaming response missing body.');
+    }
+    const raw = await readWebStreamToString(response.body as WebReadableStream<Uint8Array>);
+    const events = parseSsePayload(raw);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const candidate = events[index];
+      if (candidate !== undefined) {
+        return candidate;
+      }
+    }
+    return {};
+  }
+
+  const rawText = await response.text();
+  if (!rawText) {
+    return {};
+  }
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return { raw: rawText };
+  }
+}
+
+function parseSsePayload(payload: string): unknown[] {
+  if (!payload) {
+    return [];
+  }
+  const lines = payload.split(/\r?\n/);
+  const entries: unknown[] = [];
+  for (const line of lines) {
+    if (!line.startsWith('data:')) {
+      continue;
+    }
+    const content = line.slice(5).trim();
+    if (!content || content === '[DONE]') {
+      continue;
+    }
+    try {
+      entries.push(JSON.parse(content));
+    } catch {
+      entries.push({ raw: content });
+    }
+  }
+  return entries;
+}
+
+async function readWebStreamToString(stream: WebReadableStream<Uint8Array>): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let result = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (value) {
+      result += decoder.decode(value, { stream: true });
+    }
+  }
+  result += decoder.decode();
+  return result;
+}
+
+function extractDifyChanges(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const record = payload as Record<string, unknown>;
+  const direct = record['changeset'];
+  if (Array.isArray(direct)) {
+    return direct;
+  }
+
+  const answerDerived = extractChangesFromAnswer(record['answer']);
+  if (answerDerived.length > 0) {
+    return answerDerived;
+  }
+
+  const data = record['data'];
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (data && typeof data === 'object') {
+    const candidate =
+      (data as Record<string, unknown>)['changeset'] ?? (data as Record<string, unknown>)['changes'];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  const outputs = record['outputs'];
+  if (outputs && typeof outputs === 'object') {
+    const candidate =
+      (outputs as Record<string, unknown>)['changeset'] ?? (outputs as Record<string, unknown>)['changes'];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  const result = record['result'];
+  if (Array.isArray(result)) {
+    return result;
+  }
+
+  return [];
+}
+
+function extractChangesFromAnswer(answer: unknown): unknown[] {
+  if (typeof answer === 'string') {
+    const parsed = parseJsonLikeString(answer);
+    return extractChangesFromParsedObject(parsed);
+  }
+  if (answer && typeof answer === 'object') {
+    const record = answer as Record<string, unknown>;
+    const fromObject = extractChangesFromParsedObject(record);
+    if (fromObject.length > 0) {
+      return fromObject;
+    }
+    const textField = record['text'];
+    if (typeof textField === 'string') {
+      const parsed = parseJsonLikeString(textField);
+      return extractChangesFromParsedObject(parsed);
+    }
+  }
+  return [];
+}
+
+function parseJsonLikeString(input: string): unknown {
+  let trimmed = input.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.startsWith('```')) {
+    const lines = trimmed.split(/\r?\n/);
+    if (lines.length > 0) {
+      lines.shift();
+    }
+    if (lines.length > 0 && lines[lines.length - 1]?.startsWith('```')) {
+      lines.pop();
+    }
+    trimmed = lines.join('\n').trim();
+  }
+
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    const candidate = trimmed.slice(start, end + 1);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Fallback below
+    }
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractChangesFromParsedObject(parsed: unknown): unknown[] {
+  if (!parsed || typeof parsed !== 'object') {
+    return [];
+  }
+  const record = parsed as Record<string, unknown>;
+  if (Array.isArray(record['changeset'])) {
+    return record['changeset'] as unknown[];
+  }
+  if (Array.isArray(record['changes'])) {
+    return record['changes'] as unknown[];
+  }
+  return [];
+}
+
+function mapChangeset(rawChanges: unknown[], defaultPrompt: string): ChangesetEntry[] {
+  const entries: ChangesetEntry[] = [];
+  for (const change of rawChanges) {
+    if (!change || typeof change !== 'object') {
+      continue;
+    }
+    const record = change as Record<string, unknown>;
+    const target = coerceStringLoose(record.target);
+    const selector = coerceSelector(record.selector);
+    if (!target || !selector) {
+      continue;
+    }
+    const intent = mapChangesetIntent(record.intent);
+    const confidence = coerceConfidence(record.confidence);
+    const prompt = coerceStringLoose(record.prompt) ?? defaultPrompt;
+
+    entries.push({
+      intent,
+      target,
+      selector,
+      confidence,
+      prompt,
+    });
+  }
+  return entries;
+}
+
+function extractDifyModel(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = coerceStringLoose(record.model);
+  if (direct) {
+    return direct;
+  }
+  const data = record['data'];
+  if (data && typeof data === 'object') {
+    const fromData = coerceStringLoose((data as Record<string, unknown>).model);
+    if (fromData) {
+      return fromData;
+    }
+  }
+  const meta = record['meta'];
+  if (meta && typeof meta === 'object') {
+    const fromMeta = coerceStringLoose((meta as Record<string, unknown>).model);
+    if (fromMeta) {
+      return fromMeta;
+    }
+  }
+  return undefined;
+}
+
+function mapChangesetIntent(intent: unknown): ChangesetIntent {
+  const value = coerceStringLoose(intent)?.toLowerCase();
+  if (!value) {
+    return 'edit';
+  }
+  if ((allowedChangesetIntents as readonly string[]).includes(value)) {
+    return value as ChangesetIntent;
+  }
+  switch (value) {
+    case 'segment_add':
+    case 'add_segment':
+      return 'add';
+    case 'segment_remove':
+    case 'remove_segment':
+    case 'delete':
+      return 'remove';
+    case 'segment_merge':
+    case 'merge_segment':
+      return 'merge';
+    case 'segment_rescore':
+    case 'analysis_rescore':
+    case 'analysis_recore':
+    case 'rescore_segments':
+      return 'rescore';
+    case 'segment_edit':
+      return 'segment_edit';
+    case 'scope':
+    case 'scopechange':
+    case 'scope-change':
+      return 'scope_change';
+    default:
+      return 'edit';
+  }
+}
+
+function coerceConfidence(value: unknown): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 1) {
+    return 1;
+  }
+  return value;
+}
+
+function coerceSelector(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const normalized = coerceStringLoose(value);
+    if (normalized) {
+      return normalized;
+    }
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return undefined;
+    }
+    if (value.every((item) => typeof item === 'string')) {
+      return value.join(', ');
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function coerceStringLoose(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value.toString();
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false';
+  }
+  return undefined;
+}
 
 function mapErrorToStatus(code: RouterError['code']): number {
   switch (code) {

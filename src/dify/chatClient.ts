@@ -1,6 +1,6 @@
 import config from '../config';
 
-type DifyResponseMode = 'blocking' | 'streaming' | undefined;
+export type DifyResponseMode = 'blocking' | 'streaming';
 
 export interface DifyChatMessagePayload {
   inputs?: Record<string, unknown> | undefined;
@@ -57,7 +57,7 @@ export async function sendDifyChatMessage(payload: DifyChatMessagePayload): Prom
   const body: Record<string, unknown> = {
     inputs: payload.inputs ?? {},
     query: payload.query,
-    response_mode: "blocking",
+    response_mode: mode,
   };
 
   if (payload.conversation_id !== undefined) {
