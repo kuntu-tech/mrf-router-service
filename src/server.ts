@@ -120,7 +120,7 @@ const valueQuestionSchema = z
     intent: z.string().optional(),
     question: z.string().optional(),
     rationale: z.string().optional(),
-    answerShape: z.enum(['comparison', 'trend', 'distribution', 'optimization', 'correlation']).optional(),
+    answerShape: z.string().optional(),
   })
   .passthrough();
 
@@ -342,8 +342,7 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
     const data = await readDifyResponseBody(response, mode);
     request.log.info({ dify_response: data }, 'Received response from Dify');
 
-    const changesArray = extractDifyChanges(data);
-    const changeset = mapChangeset(changesArray, payload.feedback_text);
+    const changeset = extractDifyChanges(data);
     if (!changeset.length) {
       request.log.error(
         {
@@ -376,26 +375,6 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
     };
   }
 });
-
-type ChangesetIntent = 'segment_edit' | 'add' | 'edit' | 'remove' | 'merge' | 'rescore' | 'scope_change';
-
-interface ChangesetEntry {
-  intent: ChangesetIntent;
-  target: string;
-  selector: string;
-  confidence: number;
-  prompt: string;
-}
-
-const allowedChangesetIntents: ChangesetIntent[] = [
-  'segment_edit',
-  'add',
-  'edit',
-  'remove',
-  'merge',
-  'rescore',
-  'scope_change',
-];
 
 async function readDifyResponseBody(response: Response, mode: DifyResponseMode): Promise<unknown> {
   if (mode === 'streaming') {
@@ -577,33 +556,6 @@ function extractChangesFromParsedObject(parsed: unknown): unknown[] {
   return [];
 }
 
-function mapChangeset(rawChanges: unknown[], defaultPrompt: string): ChangesetEntry[] {
-  const entries: ChangesetEntry[] = [];
-  for (const change of rawChanges) {
-    if (!change || typeof change !== 'object') {
-      continue;
-    }
-    const record = change as Record<string, unknown>;
-    const target = coerceStringLoose(record.target);
-    const selector = coerceSelector(record.selector);
-    if (!target || !selector) {
-      continue;
-    }
-    const intent = mapChangesetIntent(record.intent);
-    const confidence = coerceConfidence(record.confidence);
-    const prompt = coerceStringLoose(record.prompt) ?? defaultPrompt;
-
-    entries.push({
-      intent,
-      target,
-      selector,
-      confidence,
-      prompt,
-    });
-  }
-  return entries;
-}
-
 function extractDifyModel(payload: unknown): string | undefined {
   if (!payload || typeof payload !== 'object') {
     return undefined;
@@ -625,85 +577,6 @@ function extractDifyModel(payload: unknown): string | undefined {
     const fromMeta = coerceStringLoose((meta as Record<string, unknown>).model);
     if (fromMeta) {
       return fromMeta;
-    }
-  }
-  return undefined;
-}
-
-function mapChangesetIntent(intent: unknown): ChangesetIntent {
-  const value = coerceStringLoose(intent)?.toLowerCase();
-  if (!value) {
-    return 'edit';
-  }
-  if ((allowedChangesetIntents as readonly string[]).includes(value)) {
-    return value as ChangesetIntent;
-  }
-  switch (value) {
-    case 'segment_add':
-    case 'add_segment':
-      return 'add';
-    case 'segment_remove':
-    case 'remove_segment':
-    case 'delete':
-      return 'remove';
-    case 'segment_merge':
-    case 'merge_segment':
-      return 'merge';
-    case 'segment_rescore':
-    case 'analysis_rescore':
-    case 'analysis_recore':
-    case 'rescore_segments':
-      return 'rescore';
-    case 'segment_edit':
-      return 'segment_edit';
-    case 'scope':
-    case 'scopechange':
-    case 'scope-change':
-      return 'scope_change';
-    default:
-      return 'edit';
-  }
-}
-
-function coerceConfidence(value: unknown): number {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 0;
-  }
-  if (value < 0) {
-    return 0;
-  }
-  if (value > 1) {
-    return 1;
-  }
-  return value;
-}
-
-function coerceSelector(value: unknown): string | undefined {
-  if (typeof value === 'string') {
-    const normalized = coerceStringLoose(value);
-    if (normalized) {
-      return normalized;
-    }
-    return undefined;
-  }
-  if (Array.isArray(value)) {
-    if (value.length === 0) {
-      return undefined;
-    }
-    if (value.every((item) => typeof item === 'string')) {
-      return value.join(', ');
-    }
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return undefined;
-    }
-  }
-  if (value && typeof value === 'object') {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return undefined;
     }
   }
   return undefined;
