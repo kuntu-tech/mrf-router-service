@@ -137,5 +137,49 @@ describe('openaiInterpreter intent heuristics', () => {
     expect(change.target).toBe('analysis');
     expect(change.dimension).toBe('D1');
   });
+
+  it('routes market questions to value question add', () => {
+    const payload = {
+      changes: [
+        {
+          intent: '',
+          target: '',
+          selector: undefined,
+          confidence: 0.8,
+          feedback_text: 'Add two new questions about the UK market and our pound users.',
+        },
+      ],
+    };
+
+    const result = __TESTING__.normalizeInterpreterResponse(payload) as { changes: FeedbackChange[] };
+    expect(result.changes).toHaveLength(1);
+    const change = result.changes[0]!;
+
+    expect(change.intent).toBe('value_question_add');
+    expect(change.target).toBe('valueQuestions');
+    expect(change.selector).toBe('segments');
+  });
+
+  it('recognises analysis directive for market opportunity', () => {
+    const payload = {
+      changes: [
+        {
+          intent: '',
+          target: '',
+          selector: undefined,
+          confidence: 0.8,
+          feedback_text: 'Analyze the UK market opportunity and refresh the scoring.',
+        },
+      ],
+    };
+
+    const result = __TESTING__.normalizeInterpreterResponse(payload) as { changes: FeedbackChange[] };
+    expect(result.changes).toHaveLength(1);
+    const change = result.changes[0]!;
+
+    expect(change.intent).toBe('analysis_edit');
+    expect(change.target).toBe('analysis');
+    expect(change.dimension).toBe('D1');
+  });
 });
 

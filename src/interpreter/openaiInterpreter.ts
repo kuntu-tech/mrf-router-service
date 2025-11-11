@@ -45,6 +45,7 @@ function buildPrompt(input: InterpretInput) {
         '  • segment_add → selector `segments` (optionally include virtual IDs/metadata for the new segment).\n' +
         '    Treat any instruction to add/introduce/expand to a new market, audience, buyer group, or consumer persona as segment addition even if the word "segment" is absent.\n' +
         '    Examples: "add a consumer market", "move towards the 2C market", "target pound buyers with a new audience".\n' +
+        '    Only use segment tools when the user clearly wants to modify the segment catalog; analytics or question requests about a market should stay in analysis/valueQuestions.\n' +
         '  • segment_edit → selector `segments[segmentId=seg_X]` (regenerate one specific segment; ID or name required).\n' +
         '    Use when feedback references improving an existing segment without changing count.\n' +
         '  • segment_merge → selector array such as `["segments[segmentId=seg_a]", "segments[segmentId=seg_b]"]` (merge multiple segments into one outcome).\n' +
@@ -293,7 +294,6 @@ function normalizeChange(change: unknown, context?: NormalizationContext): unkno
   enforceValueQuestionAddSelectorRequirements(candidate, context?.segments);
   enforceValueQuestionSelectorRequirements(candidate, context?.segments);
   ensureDefaultSelectors(candidate);
-  applySegmentAdditionFallback(candidate);
 
   if (!isLegacyIntent(candidate.intent)) {
     candidate.intent = ensureCanonicalIntentValue(candidate.intent, candidate.target as AllowedTarget, candidate.feedback_text);
@@ -356,20 +356,29 @@ function isAllowedDimensionLiteral(value: string): value is AnalysisDimension {
 }
 
 function inferTargetFromKeywords(feedbackText: unknown, selector: unknown): AllowedTarget | undefined {
-  const text = typeof feedbackText === 'string' ? feedbackText.toLowerCase() : '';
-  const selectorText = typeof selector === 'string' ? selector.toLowerCase() : '';
+  const feedbackString = typeof feedbackText === 'string' ? feedbackText : '';
+  const selectorString = typeof selector === 'string' ? selector : '';
+  const text = feedbackString.toLowerCase();
+  const selectorText = selectorString.toLowerCase();
 
-  if (/\bvalue\s+question\b|\bquestion\b/.test(text) || selectorText.includes('valuequestions')) {
+  if (selectorText.includes('valuequestions') || hasQuestionContext(feedbackString) || hasQuestionContext(selectorString)) {
     return 'valueQuestions';
   }
-  if (selectorText.includes('.analysis')) {
+  if (
+    selectorText.includes('.analysis') ||
+    hasAnalysisContext(feedbackString) ||
+    hasAnalysisContext(selectorString)
+  ) {
     return 'analysis';
   }
-  if (selectorText.includes('segments[') || matchesSegmentKeyword(selectorText)) {
+  if (selectorText.includes('segments[') || hasSegmentCoreToken(selectorString)) {
     return 'segments';
   }
 
-  if (matchesSegmentKeyword(text) && hasSegmentAdditionCue(text)) {
+  if (hasSegmentCoreToken(feedbackString)) {
+    return 'segments';
+  }
+  if (hasMarketOrAudienceContext(feedbackString) && hasSegmentAdditionCue(feedbackString)) {
     return 'segments';
   }
 
@@ -528,24 +537,88 @@ function mapRemoveIntent(target: AllowedTarget | undefined): FeedbackIntent {
   }
 }
 
-const segmentKeywordNeedles = [
-  'segment',
-  'segments',
+const segmentCoreNeedles = ['segment', 'segments', 'seg', 'segment id', 'segmentid'] as const;
+
+const marketContextNeedles = [
   'market',
   'markets',
+  'go to market',
+  'go-to-market',
+  'g2m',
   'consumer market',
-  'consumer markets',
-  'consumer segment',
-  'consumer segments',
+  'b2c market',
+  '2c market',
+] as const;
+
+const audienceContextNeedles = [
   'audience',
   'audiences',
   'buyer group',
   'buyer groups',
-  '2c market',
-  'b2c market',
+  'buyer segment',
+  'buyer segments',
+  'customer group',
+  'customer groups',
 ] as const;
 
-const normalizedSegmentKeywordNeedles = segmentKeywordNeedles
+const normalizedSegmentCoreNeedles = Array.from(segmentCoreNeedles)
+  .map((needle) => normalizeForIntentMatching(needle))
+  .filter((value) => value.length > 0);
+
+const normalizedMarketContextNeedles = Array.from(marketContextNeedles)
+  .map((needle) => normalizeForIntentMatching(needle))
+  .filter((value) => value.length > 0);
+
+const normalizedAudienceContextNeedles = Array.from(audienceContextNeedles)
+  .map((needle) => normalizeForIntentMatching(needle))
+  .filter((value) => value.length > 0);
+
+const normalizedSegmentContextNeedles = [
+  ...normalizedSegmentCoreNeedles,
+  ...normalizedMarketContextNeedles,
+  ...normalizedAudienceContextNeedles,
+];
+
+const questionContextNeedles = [
+  'question',
+  'questions',
+  'prompt',
+  'prompts',
+  'survey question',
+  'survey questions',
+  'survey prompt',
+  'survey prompts',
+  'questionnaire',
+  'survey item',
+  'ask about',
+  'ask for',
+  'ask to',
+] as const;
+
+const analysisContextNeedles = [
+  'analysis',
+  'analyze',
+  'analyzing',
+  'assessment',
+  'assess',
+  'evaluate',
+  'evaluation',
+  'insight',
+  'study',
+  'research',
+  'diagnose',
+  'diagnostic',
+  'deep dive',
+  'score',
+  'scoring',
+  'scorecard',
+] as const;
+
+const normalizedQuestionContextNeedles = Array.from(questionContextNeedles)
+  .map((needle) => normalizeForIntentMatching(needle))
+  .filter((value) => value.length > 0);
+
+const normalizedAnalysisContextNeedles = Array.from(analysisContextNeedles)
   .map((needle) => normalizeForIntentMatching(needle))
   .filter((value) => value.length > 0);
 
@@ -586,8 +659,80 @@ const normalizedSegmentAdditionCues = segmentAdditionCues
   .map((cue) => normalizeForIntentMatching(cue))
   .filter((value) => value.length > 0);
 
+function hasSegmentCoreTokenNormalized(normalized: string): boolean {
+  if (!normalized) {
+    return false;
+  }
+  return normalizedSegmentCoreNeedles.some((needle) => normalized.includes(needle));
+}
+
+function hasMarketContextTokenNormalized(normalized: string): boolean {
+  if (!normalized) {
+    return false;
+  }
+  return normalizedMarketContextNeedles.some((needle) => normalized.includes(needle));
+}
+
+function hasAudienceContextTokenNormalized(normalized: string): boolean {
+  if (!normalized) {
+    return false;
+  }
+  return normalizedAudienceContextNeedles.some((needle) => normalized.includes(needle));
+}
+
+function hasQuestionContextNormalized(normalized: string): boolean {
+  if (!normalized) {
+    return false;
+  }
+  return normalizedQuestionContextNeedles.some((needle) => normalized.includes(needle));
+}
+
+function hasAnalysisContextNormalized(normalized: string): boolean {
+  if (!normalized) {
+    return false;
+  }
+  return normalizedAnalysisContextNeedles.some((needle) => normalized.includes(needle));
+}
+
+function hasSegmentCoreToken(text: string): boolean {
+  const normalized = normalizeForIntentMatching(text);
+  return hasSegmentCoreTokenNormalized(normalized);
+}
+
+function hasMarketContextToken(text: string): boolean {
+  const normalized = normalizeForIntentMatching(text);
+  return hasMarketContextTokenNormalized(normalized);
+}
+
+function hasAudienceContextToken(text: string): boolean {
+  const normalized = normalizeForIntentMatching(text);
+  return hasAudienceContextTokenNormalized(normalized);
+}
+
+function hasMarketOrAudienceContext(text: string): boolean {
+  return hasMarketContextToken(text) || hasAudienceContextToken(text);
+}
+
+function hasQuestionContext(text: string): boolean {
+  const normalized = normalizeForIntentMatching(text);
+  return hasQuestionContextNormalized(normalized);
+}
+
+function hasAnalysisContext(text: string): boolean {
+  const normalized = normalizeForIntentMatching(text);
+  return hasAnalysisContextNormalized(normalized);
+}
+
 function matchesSegmentKeyword(text: string): boolean {
-  return matchesAny(text, Array.from(segmentKeywordNeedles));
+  const normalized = normalizeForIntentMatching(text);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    hasSegmentCoreTokenNormalized(normalized) ||
+    hasMarketContextTokenNormalized(normalized) ||
+    hasAudienceContextTokenNormalized(normalized)
+  );
 }
 
 function hasSegmentAdditionCue(text: string): boolean {
@@ -595,12 +740,15 @@ function hasSegmentAdditionCue(text: string): boolean {
   if (!normalized) {
     return false;
   }
+  if (hasQuestionContextNormalized(normalized) || hasAnalysisContextNormalized(normalized)) {
+    return false;
+  }
   for (const addition of normalizedSegmentAdditionCues) {
     const additionIndex = normalized.indexOf(addition);
     if (additionIndex === -1) {
       continue;
     }
-    for (const keyword of normalizedSegmentKeywordNeedles) {
+    for (const keyword of normalizedSegmentContextNeedles) {
       const keywordIndex = normalized.indexOf(keyword);
       if (keywordIndex === -1) {
         continue;
@@ -619,11 +767,16 @@ function mapHeuristicIntent(
 ): FeedbackIntent | undefined {
   const normalized = normalizeForIntentMatching(lowerIntent);
 
-  if (matchesAny(normalized, ['value question', 'value questions', 'valuequestions', 'question'])) {
+  const questionContextInIntent =
+    hasQuestionContext(lowerIntent) || matchesAny(normalized, ['value question', 'value questions', 'valuequestions']);
+
+  if (questionContextInIntent) {
     if (matchesAny(normalized, ['rescore', 're score', 'rerun scoring', 'rerun', 're run'])) {
       return 'value_question_rescore';
     }
-    if (matchesAny(normalized, ['add', 'increase', 'more', 'raise', 'grow', 'expand', 'plus', 'new'])) {
+    if (
+      matchesAny(normalized, ['add', 'increase', 'more', 'raise', 'grow', 'expand', 'plus', 'new', 'append', 'create'])
+    ) {
       return 'value_question_add';
     }
     if (matchesAny(normalized, ['remove', 'delete', 'drop', 'fewer', 'less', 'eliminate'])) {
@@ -636,8 +789,22 @@ function mapHeuristicIntent(
     }
   }
 
-  if (target === 'segments' || matchesSegmentKeyword(normalized)) {
-    if (
+  if (hasAnalysisContext(lowerIntent)) {
+    if (matchesAny(normalized, ['rescore', 're score', 'rerun scoring', 'rerun analysis', 'recompute'])) {
+      return 'analysis_recore';
+    }
+    if (matchesAny(normalized, ['rename', 'retitle', 'relabel'])) {
+      return 'analysis_rename';
+    }
+    return 'analysis_edit';
+  }
+
+  const segmentCoreInIntent = hasSegmentCoreToken(lowerIntent);
+  const marketOrAudienceInIntent = hasMarketOrAudienceContext(lowerIntent);
+  const segmentContextDetected = segmentCoreInIntent || marketOrAudienceInIntent;
+
+  if (target === 'segments' || segmentContextDetected) {
+    const additionLikely =
       hasSegmentAdditionCue(lowerIntent) ||
       matchesAny(normalized, [
         'missing segment',
@@ -668,8 +835,9 @@ function mapHeuristicIntent(
         'need a segments',
         'need a market',
         'need a markets',
-      ])
-    ) {
+      ]);
+
+    if (additionLikely && (segmentCoreInIntent || marketOrAudienceInIntent)) {
       return 'segment_add';
     }
     if (
@@ -822,10 +990,15 @@ function indicatesSegmentAddition(text: string, target: AllowedTarget | undefine
   if (!text) {
     return false;
   }
-  if (target !== undefined && target !== 'segments' && !matchesSegmentKeyword(text)) {
+  if (hasQuestionContext(text) || hasAnalysisContext(text)) {
     return false;
   }
-  if (!matchesSegmentKeyword(text)) {
+  const hasSegmentCore = hasSegmentCoreToken(text);
+  const hasMarketAudience = hasMarketOrAudienceContext(text);
+  if (target !== undefined && target !== 'segments' && !hasSegmentCore && !hasMarketAudience) {
+    return false;
+  }
+  if (!hasSegmentCore && !hasMarketAudience) {
     return false;
   }
   if (hasSegmentAdditionCue(text)) {
@@ -855,7 +1028,7 @@ function indicatesSegmentMerge(text: string): boolean {
   if (!text) {
     return false;
   }
-  if (!matchesSegmentKeyword(text)) {
+  if (!hasSegmentCoreToken(text) && !hasMarketOrAudienceContext(text)) {
     return false;
   }
   return matchesAny(text, ['merge', 'combine', 'consolidate', 'fold', 'unify']);
@@ -865,10 +1038,12 @@ function indicatesSegmentRescore(text: string, target: AllowedTarget | undefined
   if (!text) {
     return false;
   }
-  if (target && target !== 'segments' && !matchesSegmentKeyword(text)) {
+  const hasSegmentCore = hasSegmentCoreToken(text);
+  const hasMarketAudience = hasMarketOrAudienceContext(text);
+  if (target && target !== 'segments' && !hasSegmentCore && !hasMarketAudience) {
     return false;
   }
-  if (!matchesSegmentKeyword(text)) {
+  if (!hasSegmentCore && !hasMarketAudience) {
     return false;
   }
   if (matchesAny(text, ['value question', 'value questions']) || matchesAny(text, ['analysis', 'dimension'])) {
@@ -1155,34 +1330,16 @@ function ensureDefaultSelectors(change: Record<string, unknown>): void {
   }
 }
 
-function applySegmentAdditionFallback(change: Record<string, unknown>): void {
-  if (change.intent !== 'analysis_edit' && change.target !== 'analysis') {
-    return;
-  }
-  const feedback = typeof change.feedback_text === 'string' ? change.feedback_text : '';
-  if (!feedback) {
-    return;
-  }
-  if (!matchesSegmentKeyword(feedback) || !hasSegmentAdditionCue(feedback)) {
-    return;
-  }
-  change.intent = 'segment_add';
-  change.target = 'segments';
-  if (!hasSelectorTokens(change.selector)) {
-    change.selector = 'segments';
-    change.scopeAll = true;
-  }
-  if (change.dimension !== undefined) {
-    delete change.dimension;
-  }
-}
-
 function ensureSegmentTargetFromFeedback(
   change: Record<string, unknown>,
   segments?: SegmentContext[],
 ): void {
   const currentTarget = normalizeTarget(change.target);
   if (currentTarget === 'segments') {
+    return;
+  }
+  const feedbackText = typeof change.feedback_text === 'string' ? change.feedback_text : undefined;
+  if (feedbackText && (hasQuestionContext(feedbackText) || hasAnalysisContext(feedbackText))) {
     return;
   }
   const match = matchSegmentFromFeedback(change.feedback_text, segments);
@@ -1375,10 +1532,49 @@ function ensureAllowedTargetValue(
   selector: unknown,
   feedbackText: unknown,
 ): AllowedTarget {
+  const feedbackString = typeof feedbackText === 'string' ? feedbackText : '';
+  const selectorString = typeof selector === 'string' ? selector : '';
+  const selectorLower = selectorString.toLowerCase();
+  const additionCue = hasSegmentAdditionCue(feedbackString);
+
+  if (
+    hasQuestionContext(feedbackString) ||
+    hasQuestionContext(selectorString) ||
+    selectorLower.includes('valuequestions')
+  ) {
+    return 'valueQuestions';
+  }
+
+  const segmentHint =
+    selectorLower.includes('segments[') ||
+    hasSegmentCoreToken(selectorString) ||
+    hasSegmentCoreToken(feedbackString) ||
+    (hasMarketOrAudienceContext(feedbackString) && additionCue);
+
+  const analysisHint =
+    selectorLower.includes('.analysis') ||
+    hasAnalysisContext(feedbackString) ||
+    hasAnalysisContext(selectorString);
+
+  if (segmentHint && analysisHint) {
+    if (additionCue) {
+      return 'segments';
+    }
+    return 'analysis';
+  }
+
+  if (segmentHint && !hasQuestionContext(feedbackString)) {
+    return 'segments';
+  }
+  if (analysisHint) {
+    return 'analysis';
+  }
+
   const normalized = normalizeTarget(target);
   if (normalized) {
     return normalized;
   }
+
   const inferredFromSelector = inferTargetFromSelector(selector);
   if (inferredFromSelector) {
     return inferredFromSelector;
@@ -1387,7 +1583,11 @@ function ensureAllowedTargetValue(
   if (inferredFromKeywords) {
     return inferredFromKeywords;
   }
-  return 'segments';
+  throw new Error(
+    `Unable to determine feedback target from provided data: ${String(
+      typeof feedbackText === 'string' ? feedbackText : '',
+    )}`,
+  );
 }
 
 function ensureCanonicalIntentValue(
@@ -1397,6 +1597,16 @@ function ensureCanonicalIntentValue(
 ): FeedbackIntent {
   const canonical = canonicalizeIntent(intent, target);
   if (canonical) {
+    if (target === 'segments' && canonical === 'analysis_edit') {
+      const inferredForSegments = inferIntentFromFeedback(feedbackText, target);
+      if (inferredForSegments && inferredForSegments !== 'analysis_edit') {
+        return inferredForSegments;
+      }
+      if (typeof feedbackText === 'string' && hasSegmentAdditionCue(feedbackText)) {
+        return 'segment_add';
+      }
+      return 'segment_edit';
+    }
     return canonical;
   }
   const inferred = inferIntentFromFeedback(feedbackText, target);
@@ -1469,13 +1679,14 @@ function appendAnalysisDimension(baseSelector: string, dimension: unknown): stri
 }
 
 function enforceValueQuestionIntentHeuristics(change: Record<string, unknown>): void {
-  const feedback = typeof change.feedback_text === 'string' ? change.feedback_text.toLowerCase() : '';
-  if (!feedback || !feedback.includes('question')) {
+  const feedback = typeof change.feedback_text === 'string' ? change.feedback_text : '';
+  if (!feedback || !hasQuestionContext(feedback)) {
     return;
   }
-  const addCue = /\b(add|create|insert|new)\b/.test(feedback);
-  const removeCue = /\b(remove|delete|drop|eliminate|get rid of)\b/.test(feedback);
-  const editCue = /\b(edit|change|update|modify|reword|rephrase)\b/.test(feedback);
+  const normalized = normalizeForIntentMatching(feedback);
+  const addCue = matchesAny(normalized, ['add', 'create', 'insert', 'new', 'append', 'more', 'add prompt']);
+  const removeCue = matchesAny(normalized, ['remove', 'delete', 'drop', 'eliminate', 'get rid of', 'subtract']);
+  const editCue = matchesAny(normalized, ['edit', 'change', 'update', 'modify', 'reword', 'rephrase', 'tweak']);
 
   if (addCue) {
     change.intent = 'value_question_add';
