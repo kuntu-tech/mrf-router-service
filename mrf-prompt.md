@@ -6,6 +6,7 @@
  - 解析的指令中intent、target的值必须严格使用指令清单里的规则，禁止输出指令清单中不存在的值。
  - 解析的指令中selector的值必须符合指令清单里selector中的格式规则，其中<xxx>值为已有数据中动态ID，必须严格从已有数据中提取，禁止捏造。
  - 对于无法通过自然语言和已有数据解析出可用指令时，应该输出友好提示，引导用户如何用自然语言已有数据结构或内容。
+ - 特殊标记说明:market opportunity=>D1,customer persona=>D2,Competitive Advantage=>D3,Revenue Potential=>D4
 
 
 # 可用指令组合清单和场景描述
@@ -39,25 +40,25 @@
     "intent": "analysis_edit",
     "target": "analysis",
     "selector": "segments[segmentId=<seg_01>].analysis.D1",
-    "description": "当用户希望更新市场规模、增长潜力、竞争强度等描述内容时使用。该指令修改指定细分市场的 D1 分析维度（通常代表市场概况），可更新其summary、supporting_indicators等字段。注意：seg_01必须是已有数据segmentId的值，不能捏造。"
+    "description": "当用户希望更新/分析'market opportunity'、市场规模、增长潜力、竞争强度等描述内容时使用。该指令修改指定细分市场的 D1(market opportunity) 分析维度，如用户自然语言中未明确要分析的segment则分析所有市场规模（通常代表市场概况），可更新其summary、supporting_indicators等字段。注意：seg_01必须是已有数据segmentId的值，不能捏造。"
   },
   {
     "intent": "analysis_edit",
     "target": "analysis",
     "selector": "segments[segmentId=<seg_01>].analysis.D2",
-    "description": "当用户希望调整目标用户画像、决策流程、痛点等内容时触发。该指令修改指定细分市场的 D2 分析维度（通常代表用户和需求分析），可更新user_persona、pain_points等内容。注意：seg_01必须是已有数据segmentId的值，不能捏造"
+    "description": "当用户希望调整目标用户画像、决策流程、痛点等内容时触发。该指令修改指定细分市场的 D2(customer persona) 分析维度（通常代表用户和需求分析），可更新user_persona、pain_points等内容。注意：seg_01必须是已有数据segmentId的值，不能捏造"
   },
   {
     "intent": "analysis_edit",
     "target": "analysis",
     "selector": "segments[segmentId=<seg_01>].analysis.D3",
-    "description": "当用户讨论转化潜力、收入预期、留存指标时使用。此指令修改指定细分市场的 D3 分析维度（通常代表商业可行性分析），更新revenue_band、conversion_rate_est等指标。注意：seg_01必须是已有数据segmentId的值，不能捏造"
+    "description": "当用户讨论转化潜力、收入预期、留存指标时使用。此指令修改指定细分市场的 D3(Competitive Advantage) 分析维度（通常代表商业可行性分析），更新revenue_band、conversion_rate_est等指标。注意：seg_01必须是已有数据segmentId的值，不能捏造"
   },
   {
     "intent": "analysis_edit",
     "target": "analysis",
     "selector": "segments[segmentId=<seg_01>].analysis.D4",
-    "description": "当用户提及竞争优势、护城河、可扩展性等时触发。此指令修改指定细分市场的 D4 分析维度（通常代表竞争与差异化分析），更新moat_score、scalability_score、competitive_advantage等字段。注意：seg_01必须是已有数据segmentId的值，不能捏造"
+    "description": "当用户提及竞争优势、护城河、可扩展性等时触发。此指令修改指定细分市场的 D4(Revenue Potential) 分析维度（通常代表竞争与差异化分析），更新moat_score、scalability_score、competitive_advantage等字段。注意：seg_01必须是已有数据segmentId的值，不能捏造"
   },
   {
     "intent": "value_question_add",

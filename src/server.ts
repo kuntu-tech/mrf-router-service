@@ -343,20 +343,7 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
     request.log.info({ dify_response: data }, 'Received response from Dify');
 
     const changeset = extractDifyChanges(data);
-    if (!changeset.length) {
-      request.log.error(
-        {
-          data,
-        },
-        'Dify response did not contain a valid changeset',
-      );
-      reply.status(502);
-      return {
-        error: 'DIFY_INVALID_RESPONSE',
-        message: 'Dify response did not include a valid changeset.',
-      };
-    }
-
+    const errorMessage = extractDifyError(data) ?? '';
     const model = extractDifyModel(data) ?? 'dify';
 
     return {
@@ -365,6 +352,7 @@ fastify.post('/api/v1/feedback-mrf/intention', async (request, reply) => {
       task_id: payload.task_id,
       model,
       changeset,
+      error: errorMessage,
     };
   } catch (error) {
     request.log.error(error);
@@ -577,6 +565,36 @@ function extractDifyModel(payload: unknown): string | undefined {
     const fromMeta = coerceStringLoose((meta as Record<string, unknown>).model);
     if (fromMeta) {
       return fromMeta;
+    }
+  }
+  return undefined;
+}
+
+function extractDifyError(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = coerceStringLoose(record.error);
+  if (direct) {
+    return direct;
+  }
+  const data = record['data'];
+  if (data && typeof data === 'object') {
+    const fromData = coerceStringLoose((data as Record<string, unknown>).error);
+    if (fromData) {
+      return fromData;
+    }
+  }
+  const answer = record['answer'];
+  if (typeof answer === 'string') {
+    const parsed = parseJsonLikeString(answer);
+    if (parsed && typeof parsed === 'object') {
+      const parsedRecord = parsed as Record<string, unknown>;
+      const fromParsed = coerceStringLoose(parsedRecord.error);
+      if (fromParsed) {
+        return fromParsed;
+      }
     }
   }
   return undefined;
